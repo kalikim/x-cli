@@ -1,0 +1,15 @@
+# Build artifacts
+dist/
+
+# IDE/editor cruft
+*.swp
+*.swo
+*.idea/
+.vscode/
+
+# OS files
+.DS_Store
+
+# Credentials
+*.env
+config.json
