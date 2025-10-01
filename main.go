@@ -39,9 +39,17 @@ type tweetMediaBlock struct {
 	MediaIDs []string `json:"media_ids"`
 }
 
+type scheduledTweet struct {
+	Text      string    `json:"text"`
+	Image     string    `json:"image,omitempty"`
+	ScheduleTime time.Time `json:"schedule_time"`
+	ID        string    `json:"id"`
+}
+
 func main() {
 	var text string
 	var image string
+	var scheduleAt string
 
 	rootCmd := &cobra.Command{
 		Use:   "x-cli",
@@ -57,6 +65,12 @@ func main() {
 				return err
 			}
 
+			// Handle scheduling
+			if scheduleAt != "" {
+				return handleScheduledTweet(text, image, scheduleAt)
+			}
+
+			// Post immediately
 			client := &http.Client{Timeout: 20 * time.Second}
 
 			var mediaIDs []string
@@ -81,8 +95,43 @@ func main() {
 		},
 	}
 
+	// Add scheduler command
+	schedulerCmd := &cobra.Command{
+		Use:   "scheduler",
+		Short: "Manage scheduled tweets",
+	}
+
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all scheduled tweets",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return listScheduledTweets()
+		},
+	}
+
+	daemonCmd := &cobra.Command{
+		Use:   "daemon",
+		Short: "Run scheduler daemon to post scheduled tweets",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSchedulerDaemon()
+		},
+	}
+
+	cancelCmd := &cobra.Command{
+		Use:   "cancel [tweet-id]",
+		Short: "Cancel a scheduled tweet",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cancelScheduledTweet(args[0])
+		},
+	}
+
+	schedulerCmd.AddCommand(listCmd, daemonCmd, cancelCmd)
+	rootCmd.AddCommand(schedulerCmd)
+
 	rootCmd.Flags().StringVarP(&text, "text", "t", "", "Tweet text")
 	rootCmd.Flags().StringVarP(&image, "image", "i", "", "Path to image file")
+	rootCmd.Flags().StringVarP(&scheduleAt, "schedule", "s", "", "Schedule tweet (format: '2024-12-25 15:30' or '15:30' for today)")
 	rootCmd.MarkFlagRequired("text")
 
 	if err := rootCmd.Execute(); err != nil {
@@ -353,4 +402,216 @@ func detectMime(path string, data []byte) string {
 	}
 
 	return http.DetectContentType(data)
+}
+func handleScheduledTweet(text, image, scheduleAt string) error {
+	scheduleTime, err := parseScheduleTime(scheduleAt)
+	if err != nil {
+		return fmt.Errorf("invalid schedule time: %w", err)
+	}
+
+	if scheduleTime.Before(time.Now()) {
+		return errors.New("schedule time must be in the future")
+	}
+
+	tweet := scheduledTweet{
+		Text:         text,
+		Image:        image,
+		ScheduleTime: scheduleTime,
+		ID:           generateTweetID(),
+	}
+
+	if err := saveScheduledTweet(tweet); err != nil {
+		return fmt.Errorf("saving scheduled tweet: %w", err)
+	}
+
+	fmt.Printf("✅ Tweet scheduled for %s (ID: %s)\n", scheduleTime.Format("2006-01-02 15:04:05"), tweet.ID)
+	fmt.Println("💡 Run 'x-cli scheduler daemon' to start the scheduler")
+	return nil
+}
+
+func parseScheduleTime(scheduleAt string) (time.Time, error) {
+	now := time.Now()
+	
+	// Try different time formats
+	formats := []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"01-02 15:04",
+		"15:04",
+	}
+
+	for _, format := range formats {
+		if t, err := time.Parse(format, scheduleAt); err == nil {
+			// For time-only format, use today's date
+			if format == "15:04" {
+				return time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, now.Location()), nil
+			}
+			// For month-day format, use current year
+			if format == "01-02 15:04" {
+				return time.Date(now.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, now.Location()), nil
+			}
+			return t, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("invalid time format. Use: 'YYYY-MM-DD HH:MM', 'MM-DD HH:MM', or 'HH:MM'")
+}
+
+func generateTweetID() string {
+	return fmt.Sprintf("tweet_%d", time.Now().UnixNano())
+}
+
+func saveScheduledTweet(tweet scheduledTweet) error {
+	tweets, err := loadScheduledTweets()
+	if err != nil {
+		tweets = []scheduledTweet{}
+	}
+
+	tweets = append(tweets, tweet)
+	return saveScheduledTweets(tweets)
+}
+
+func loadScheduledTweets() ([]scheduledTweet, error) {
+	data, err := os.ReadFile("scheduled_tweets.json")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []scheduledTweet{}, nil
+		}
+		return nil, err
+	}
+
+	var tweets []scheduledTweet
+	if err := json.Unmarshal(data, &tweets); err != nil {
+		return nil, err
+	}
+
+	return tweets, nil
+}
+
+func saveScheduledTweets(tweets []scheduledTweet) error {
+	data, err := json.MarshalIndent(tweets, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile("scheduled_tweets.json", data, 0644)
+}
+
+func listScheduledTweets() error {
+	tweets, err := loadScheduledTweets()
+	if err != nil {
+		return fmt.Errorf("loading scheduled tweets: %w", err)
+	}
+
+	if len(tweets) == 0 {
+		fmt.Println("📭 No scheduled tweets found")
+		return nil
+	}
+
+	fmt.Printf("📅 Found %d scheduled tweet(s):\n\n", len(tweets))
+	for _, tweet := range tweets {
+		status := "⏰ Pending"
+		if tweet.ScheduleTime.Before(time.Now()) {
+			status = "⚠️ Overdue"
+		}
+
+		fmt.Printf("ID: %s\n", tweet.ID)
+		fmt.Printf("Text: %s\n", tweet.Text)
+		if tweet.Image != "" {
+			fmt.Printf("Image: %s\n", tweet.Image)
+		}
+		fmt.Printf("Scheduled: %s\n", tweet.ScheduleTime.Format("2006-01-02 15:04:05"))
+		fmt.Printf("Status: %s\n", status)
+		fmt.Println("---")
+	}
+
+	return nil
+}
+
+func cancelScheduledTweet(tweetID string) error {
+	tweets, err := loadScheduledTweets()
+	if err != nil {
+		return fmt.Errorf("loading scheduled tweets: %w", err)
+	}
+
+	var updatedTweets []scheduledTweet
+	found := false
+
+	for _, tweet := range tweets {
+		if tweet.ID != tweetID {
+			updatedTweets = append(updatedTweets, tweet)
+		} else {
+			found = true
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("tweet with ID %s not found", tweetID)
+	}
+
+	if err := saveScheduledTweets(updatedTweets); err != nil {
+		return fmt.Errorf("saving updated tweets: %w", err)
+	}
+
+	fmt.Printf("✅ Cancelled scheduled tweet: %s\n", tweetID)
+	return nil
+}
+
+func runSchedulerDaemon() error {
+	fmt.Println("🚀 Starting tweet scheduler daemon...")
+	fmt.Println("Press Ctrl+C to stop")
+
+	cfg := config.LoadConfig()
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+
+	for {
+		tweets, err := loadScheduledTweets()
+		if err != nil {
+			log.Printf("Error loading scheduled tweets: %v", err)
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		var remainingTweets []scheduledTweet
+		now := time.Now()
+
+		for _, tweet := range tweets {
+			if tweet.ScheduleTime.Before(now) || tweet.ScheduleTime.Equal(now) {
+				fmt.Printf("📤 Posting scheduled tweet: %s\n", tweet.Text)
+				
+				var mediaIDs []string
+				if tweet.Image != "" {
+					id, err := uploadMedia(client, cfg, tweet.Image)
+					if err != nil {
+						log.Printf("Error uploading media for tweet %s: %v", tweet.ID, err)
+						remainingTweets = append(remainingTweets, tweet)
+						continue
+					}
+					mediaIDs = append(mediaIDs, id)
+				}
+
+				if err := postTweet(client, cfg, tweet.Text, mediaIDs); err != nil {
+					log.Printf("Error posting tweet %s: %v", tweet.ID, err)
+					remainingTweets = append(remainingTweets, tweet)
+					continue
+				}
+
+				fmt.Printf("✅ Successfully posted scheduled tweet: %s\n", tweet.ID)
+			} else {
+				remainingTweets = append(remainingTweets, tweet)
+			}
+		}
+
+		if len(remainingTweets) != len(tweets) {
+			if err := saveScheduledTweets(remainingTweets); err != nil {
+				log.Printf("Error saving updated tweets: %v", err)
+			}
+		}
+
+		time.Sleep(30 * time.Second) // Check every 30 seconds
+	}
 }
