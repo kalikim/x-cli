@@ -13,3 +13,6 @@ dist/
 # Credentials
 *.env
 config.json
+
+# Runtime files
+scheduled_tweets.json
