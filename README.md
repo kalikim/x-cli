@@ -1,6 +1,6 @@
 # x-cli
 
-`x-cli` is a simple command-line tool for posting text or media updates to X (formerly Twitter). It uses Go's standard library (plus Cobra for CLI ergonomics) and signs OAuth 1.0a requests manually: tweets are created through the v2 `POST /2/tweets` endpoint, and media uploads go through the v1.1 media API.
+`x-cli` is a simple command-line tool for posting text or media updates to X (formerly Twitter) with scheduling capabilities. It uses Go's standard library (plus Cobra for CLI ergonomics) and signs OAuth 1.0a requests manually: tweets are created through the v2 `POST /2/tweets` endpoint, and media uploads go through the v1.1 media API.
 
 > **Note:** You still need legacy-style user credentials with the `tweet.write` capability. If your keys are limited to the newer Essential tier, the platform rejects write attempts with HTTP 403 errors.
 
@@ -15,7 +15,7 @@
 Clone the repository and change into it:
 
 ```bash
-git clone https://github.com/kalikim/x-cli.git
+git clone https://github.com/limo39/x-cli.git
 cd x-cli
 ```
 
@@ -90,7 +90,28 @@ export TWITTER_ACCESS_SECRET="YOUR_ACCESS_SECRET"
 
 These variables override values in `config.json`.
 
+## Quick Start with Scheduling
+
+1. **Schedule a tweet**:
+   ```bash
+   go run . --text "My first scheduled tweet! 🚀" --schedule "18:00"
+   ```
+
+2. **Check your scheduled tweets**:
+   ```bash
+   go run . scheduler list
+   ```
+
+3. **Start the scheduler daemon** (in a separate terminal or background):
+   ```bash
+   go run . scheduler daemon
+   ```
+
+4. **Your tweet will be posted automatically** at the scheduled time!
+
 ## Usage
+
+### Immediate Posting
 
 Post a text-only update:
 
@@ -104,12 +125,71 @@ Post with an image:
 go run . --text "New blog post!" --image /path/to/image.png
 ```
 
+### Scheduled Tweets
+
+Schedule a tweet for a specific date and time:
+
+```bash
+go run . --text "Happy New Year! 🎉" --schedule "2024-12-31 23:59"
+```
+
+Schedule a tweet for later today:
+
+```bash
+go run . --text "Good morning!" --schedule "09:00"
+```
+
+Schedule a tweet with an image:
+
+```bash
+go run . --text "Check out this photo!" --image photo.jpg --schedule "15:30"
+```
+
+### Managing Scheduled Tweets
+
+List all scheduled tweets:
+
+```bash
+go run . scheduler list
+```
+
+Run the scheduler daemon (keeps running and posts tweets at scheduled times):
+
+```bash
+go run . scheduler daemon
+```
+
+Cancel a scheduled tweet:
+
+```bash
+go run . scheduler cancel tweet_1234567890
+```
+
 If you installed the binary, replace `go run .` with `x-cli`.
 
-### Command reference
+### Command Reference
 
+#### Main Commands
 - `--text`, `-t` *(required)*: Tweet text.
 - `--image`, `-i`: Path to a media file (currently sent as-is with a base64 upload).
+- `--schedule`, `-s`: Schedule tweet for later posting. Supports multiple formats:
+  - `YYYY-MM-DD HH:MM` - Full date and time
+  - `MM-DD HH:MM` - Month, day, and time (current year)
+  - `HH:MM` - Time only (today's date)
+
+#### Scheduler Commands
+- `scheduler list` - Show all scheduled tweets
+- `scheduler daemon` - Run background process to post scheduled tweets
+- `scheduler cancel [tweet-id]` - Cancel a specific scheduled tweet
+
+### Scheduling Features
+
+- **Flexible time formats**: Use full dates, month-day, or time-only formats
+- **Persistent storage**: Scheduled tweets are saved locally in `scheduled_tweets.json`
+- **Background daemon**: Run the scheduler to automatically post tweets at the right time
+- **Image support**: Schedule tweets with media attachments
+- **Management tools**: List, view, and cancel scheduled tweets
+- **Validation**: Prevents scheduling tweets in the past
 
 Errors from the API are surfaced verbatim to help diagnose credential or access issues.
 
@@ -118,6 +198,9 @@ Errors from the API are surfaced verbatim to help diagnose credential or access 
 - **Missing credentials**: The CLI reports which environment variables are required.
 - **HTTP 401/403 responses**: Ensure your app still has access to `tweet.write` for v2 and that the tokens match the OAuth 1.0a user flow.
 - **Timeouts**: Network connectivity to `api.twitter.com` and `upload.twitter.com` is required. Check firewalls or proxies.
+- **Schedule time validation**: Ensure scheduled times are in the future. Use formats like `YYYY-MM-DD HH:MM`, `MM-DD HH:MM`, or `HH:MM`.
+- **Scheduler daemon**: The daemon must be running to post scheduled tweets. Use `x-cli scheduler daemon` to start it.
+- **Scheduled tweets storage**: Scheduled tweets are stored in `scheduled_tweets.json` in the current directory.
 
 ## Development Notes
 
